@@ -1,0 +1,111 @@
+require('json')
+require('socket.http')
+require("ltn12")
+
+socket.http.TIMEOUT = 10
+ 
+--**********************************************************
+-->>>>>>>>>>>>>USER MODIFICATION AREA (BEGIN)<<<<<<<<<<<<<<<
+--**********************************************************
+
+local searchBy = 1								-- 0-search by city name; 1-search by cityID
+local latitude = grp.getvalue('Meteo - Latitudine')
+local longitude = grp.getvalue('Meteo - Longitudine')
+local city = 'Capena,IT'					--city name
+local cityID= '3180725'						--city ID (see openweathermap.org)
+local timezone= 1									--add a timeshift of your timezone (eg. timezone = 2 for Prague)
+
+local units = 'metric'						--units of measured values: metric/imperial
+local lang = 'it'									--[[language of weather description
+																		English - en, Russian - ru, Italian - it, Spanish - es (or sp),
+																		Ukrainian - uk (or ua), German - de, Portuguese - pt, Romanian - ro,
+																		Polish - pl, Finnish - fi, Dutch - nl, French - fr, Bulgarian - bg,
+																		Swedish - sv (or se), Chinese Traditional - zh_tw,
+																		Chinese Simplified - zh (or zh_cn), Turkish - tr, Croatian - hr, Catalan - ca --]] 
+local proxy=nil	--set proxy server e.g. 'http://10.10.10.10/'. If no proxy is needed set proxy=nil
+
+local apikey='d91459c4dc5909ddf7ea0214e4d7f5f7'--API key can be retrieved after registration on http://openweathermap.org/appid
+--**********************************************************
+-->>>>>>>>>>>>>USER MODIFICATION AREA (END)<<<<<<<<<<<<<<<<<
+--**********************************************************
+
+local data,_, code, headers, status, ret
+local proxyServer="http://10.154.24.21:8080/"
+
+local response = {}
+
+if searchBy==0 then
+		_, code, headers, status = socket.http.request{
+    		url='http://api.openweathermap.org/data/2.5/weather?q='..city..'&mode=json&units='..units..'&lang='..lang..'&APPID='..apikey, 
+  		  sink = ltn12.sink.table(response),
+    		proxy=proxy
+  	}
+elseif searchBy== 1 then
+  		_, code, headers, status = socket.http.request{
+    url='http://api.openweathermap.org/data/2.5/weather?lat='..latitude..'&lon='..longitude..'&mode=json&units='..units..'&lang='..lang..'&APPID='..apikey,
+  		  sink = ltn12.sink.table(response),
+    		proxy=proxy
+  	}
+end
+
+if code==200 then 
+  alert('Fetch OK')
+else
+  alert('Weather: cannot fetch data. Status code: '..code)
+  return
+end
+
+ret = table.concat(response)
+data = json.pdecode(ret)
+if not data then
+  alert('Weather: cannot parse data')
+  return
+end
+
+log(data)
+
+grp.update('33/1/1', (data.main.temp), dt.float16) 			--Current temperature [Celsius deg]
+grp.update('33/1/2', (data.main.temp_min),dt.float16) 	--Minimum temperature at the moment
+grp.update('33/1/3', (data.main.temp_max),dt.float16) 	--Maximum temperature at the moment
+grp.update('33/1/4', (data.main.pressure),dt.float16) 	--Atmospheric pressure (on the sea level, if there is no sea_level or grnd_level data), hPa
+
+grp.update('33/1/5', (data.wind.speed),dt.float16)			--Wind speed, mps
+grp.update('33/1/6', (data.wind.deg),dt.angle)					--Wind direction, degrees (meteorological)
+
+grp.update('33/1/7', (data.clouds.all),dt.scale)				--Cloudiness [%]
+grp.update('33/1/8', (data.weather[1].id),dt.int16)		--Weather condition ID
+grp.update('33/1/9', (data.weather[1].main),dt.string)	--Group of weather parameters (Rain, Snow, Extreme)
+grp.update('33/1/10', (data.weather[1].description),dt.string)--Weather condition within the group
+grp.update('33/1/11', (data.weather[1].icon),dt.string)--Weather icon ID
+
+grp.update('33/1/12', (data.rain),dt.float16)				--Precipitation volume for last 3 hours, [mm]
+grp.update('33/1/13', (data.snow),dt.float16)				--Snow volume for last 3 hours, mm
+
+--set time shift base od day saving time
+if os.date("*t").isdst==false then
+  dst_timeshift= 0
+else
+  dst_timeshift= 1
+end
+
+--convert the sunrise time to KNX datatype format
+sunrise_time_hour=math.floor((data.sys.sunrise%86400)/3600)
+sunrise_time_min=math.floor(((data.sys.sunrise%86400)%3600)/60)
+sunrise_time_sec=(((data.sys.sunrise%86400)%3600)%60)
+sunrise_time={hour=sunrise_time_hour+timezone+dst_timeshift,minute=sunrise_time_min,second=sunrise_time_sec}
+
+--convert the sunset time to KNX datatype format
+sunset_time_hour=math.floor((data.sys.sunset%86400)/3600)
+sunset_time_min=math.floor(((data.sys.sunset%86400)%3600)/60)
+sunset_time_sec=(((data.sys.sunset%86400)%3600)%60)
+sunset_time={hour=sunset_time_hour+timezone+dst_timeshift,minute=sunset_time_min,second=sunset_time_sec}
+
+
+grp.update('33/1/14', (sunrise_time),dt.time)				--sunrise time
+grp.update('33/1/15', (sunset_time) ,dt.time)				--sunset time
+
+grp.update('33/1/16', data.coord.lon,dt.float16)		--longitude
+grp.update('33/1/17', data.coord.lat,dt.float16)		--latitude
+
+
+log("Fetch of current weather data done.")
